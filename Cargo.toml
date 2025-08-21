@@ -1,13 +1,20 @@
 [workspace]
 members = [
-    "programs/*"
+    "programs-ecs/components/*",
+    "programs-ecs/systems/*"
 ]
 resolver = "2"
+
+[workspace.dependencies]
+chat = { path = "programs-ecs/components/chat", features = ["cpi"] }
+bolt-lang = "0.1.11"
+anchor-lang = "0.31.1"
 
 [profile.release]
 overflow-checks = true
 lto = "fat"
 codegen-units = 1
+
 [profile.release.build-override]
 opt-level = 3
 incremental = false
