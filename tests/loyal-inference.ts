@@ -1,38 +1,43 @@
 import * as anchor from "@coral-xyz/anchor";
-import { Program } from "@coral-xyz/anchor";
+import { Program, web3 } from "@coral-xyz/anchor";
 import { LoyalInference } from "../target/types/loyal_inference";
-import { LAMPORTS_PER_SOL } from "@solana/web3.js";
+import { Connection, LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { expect } from "chai";
+import {
+  getClosestValidator,
+  sendMagicTransaction,
+} from "@magicblock-labs/ephemeral-rollups-sdk";
 
 const SEED_TEST_PDA = "loyal-pda-test";
 
-describe("inference-pay", () => {
+describe("loyal-inference", () => {
   // Configure the client to use the local cluster.
-  const provider = anchor.AnchorProvider.env();
-  anchor.setProvider(provider);
+  anchor.setProvider(anchor.AnchorProvider.env());
 
-  const providerEphemeralRollup = new anchor.AnchorProvider(
-    new anchor.web3.Connection(
-      process.env.PROVIDER_ENDPOINT || "https://devnet-eu.magicblock.app/",
-      {
-        wsEndpoint:
-          process.env.WS_ENDPOINT || "wss://devnet-eu.magicblock.app/",
-      }
-    ),
-    anchor.Wallet.local()
-  );
-  console.log("Base Layer Connection: ", provider.connection._rpcEndpoint);
-  console.log(
-    "Ephemeral Rollup Connection: ",
-    providerEphemeralRollup.connection._rpcEndpoint
-  );
-  console.log(`Current SOL Public Key: ${anchor.Wallet.local().publicKey}`);
-
+  const provider = anchor.getProvider() as anchor.AnchorProvider;
   const program = anchor.workspace.loyal_inference as Program<LoyalInference>;
   const [pda] = anchor.web3.PublicKey.findProgramAddressSync(
     [Buffer.from(SEED_TEST_PDA)],
     program.programId
   );
+  const providerEphemeralRollup = new anchor.AnchorProvider(
+    new anchor.web3.Connection(
+      process.env.PROVIDER_ENDPOINT || "https://devnet.magicblock.app/",
+      {
+        wsEndpoint: process.env.WS_ENDPOINT || "wss://devnet.magicblock.app/",
+      }
+    ),
+    anchor.Wallet.local()
+  );
+  const ephemeralProgram = new Program(program.idl, providerEphemeralRollup);
+
+  console.log("Base Layer Connection: ", provider.connection.rpcEndpoint);
+  console.log(
+    "Ephemeral Rollup Connection: ",
+    providerEphemeralRollup.connection.rpcEndpoint
+  );
+  console.log(`Current SOL Public Key: ${anchor.Wallet.local().publicKey}`);
+
   console.log("Program ID: ", program.programId.toString());
   console.log("Loyal PDA: ", pda.toString());
 
@@ -48,14 +53,17 @@ describe("inference-pay", () => {
     const txHash = await program.methods
       .initialize()
       .accounts({
-        //@ts-ignore
-        chat: pda,
-        user: provider.publicKey,
-        systemProgram: anchor.web3.SystemProgram.programId,
+        payer: anchor.getProvider().publicKey,
       })
       .rpc({ skipPreflight: true });
     const duration = Date.now() - startTime;
     console.log(`${duration}ms (Base Layer) Initialize txHash: ${txHash}`);
+
+    const chat = await program.account.loyalChat.fetch(pda);
+    expect(chat.msgIn.length).to.equal(0);
+    expect(chat.msgOut.length).to.equal(0);
+    expect(chat.processing).to.be.false;
+    expect(chat.userTurn).to.be.true;
   });
 
   it("Send message to model", async () => {
@@ -66,8 +74,7 @@ describe("inference-pay", () => {
     const txHash = await program.methods
       .messageIn(msgBuffer)
       .accounts({
-        //@ts-ignore
-        chat: pda,
+        payer: anchor.getProvider().publicKey,
       })
       .rpc();
     const duration = Date.now() - startTime;
@@ -79,5 +86,18 @@ describe("inference-pay", () => {
     expect(msgInString).to.equal(msg);
     expect(chat.processing).to.be.true;
     expect(chat.userTurn).to.be.false;
+  });
+
+  it("Delegate counter to ER", async () => {
+    const start = Date.now();
+
+    let tx = await program.methods
+      .delegate()
+      .accounts({
+        payer: anchor.getProvider().publicKey,
+      })
+      .rpc();
+    const duration = Date.now() - start;
+    console.log(`${duration}ms delegate txHash: ${tx}`);
   });
 });

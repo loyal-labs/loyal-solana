@@ -27,6 +27,17 @@ pub mod loyal_inference {
         Ok(())
     }
 
+    /// Delegate the account to the delegation program
+    pub fn delegate(ctx: Context<DelegateInput>) -> Result<()> {
+        ctx.accounts.delegate_chat(
+            &ctx.accounts.payer,
+            &[TEST_PDA_SEED],
+            DelegateConfig::default(), 
+        )?;
+        Ok(())
+    }
+
+    // Send the query to oracle
     pub fn message_in(ctx: Context<MessageIn>, content: Vec<u8>) -> Result<()> {
         let chat = &mut ctx.accounts.chat;
         chat.msg_in = content;
@@ -37,20 +48,34 @@ pub mod loyal_inference {
     }
 }
 
+
 //TODO:
 //-Use pre-allocation for msg_in and msg_out to reduce the space used
 #[derive(Accounts)]
 pub struct Initialize<'info> {
-    #[account(init_if_needed, payer = user, space = 8 + 4 + 256 + 4 + 256 + 1 + 1, seeds = [TEST_PDA_SEED], bump)]
+    #[account(mut)]
+    pub payer: Signer<'info>,
+
+    #[account(init, payer = payer, space = 8 + 4 + 256 + 4 + 256 + 1 + 1, seeds = [TEST_PDA_SEED], bump)]
     pub chat: Account<'info, LoyalChat>,
 
-    #[account(mut)]
-    pub user: Signer<'info>,
     pub system_program: Program<'info, System>,
+}
+
+#[delegate]
+#[derive(Accounts)]
+pub struct DelegateInput<'info> {
+    pub payer: Signer<'info>,
+    /// CHECK The pda to delegate
+    #[account(mut, del, seeds = [TEST_PDA_SEED], bump)]
+    pub chat: AccountInfo<'info>,
 }
 
 #[derive(Accounts)]
 pub struct MessageIn<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+
     #[account(mut, seeds = [TEST_PDA_SEED], bump)]
     pub chat: Account<'info, LoyalChat>, 
 }

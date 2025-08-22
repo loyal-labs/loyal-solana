@@ -14,7 +14,7 @@ loyal = "3ezv3YP5V83UP6KNqgHgt7NGE6JonkSK32nnbMyFEX4U"
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "localnet"
+cluster = "devnet"
 wallet = "~/.config/solana/id.json"
 
 [workspace]
