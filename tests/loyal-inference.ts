@@ -3,12 +3,9 @@ import { Program, web3 } from "@coral-xyz/anchor";
 import { LoyalInference } from "../target/types/loyal_inference";
 import { Connection, LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { expect } from "chai";
-import {
-  getClosestValidator,
-  sendMagicTransaction,
-} from "@magicblock-labs/ephemeral-rollups-sdk";
+import { sendMagicTransaction } from "@magicblock-labs/ephemeral-rollups-sdk";
 
-const SEED_TEST_PDA = "loyal-pda-test";
+const SEED_TEST_PDA = "loyal-pda-test-dev";
 
 describe("loyal-inference", () => {
   // Configure the client to use the local cluster.

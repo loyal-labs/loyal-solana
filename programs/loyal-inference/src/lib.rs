@@ -5,7 +5,7 @@ use ephemeral_rollups_sdk::ephem::{commit_accounts, commit_and_undelegate_accoun
 
 declare_id!("3ezv3YP5V83UP6KNqgHgt7NGE6JonkSK32nnbMyFEX4U");
 
-pub const TEST_PDA_SEED: &[u8] = b"loyal-pda-test";
+pub const TEST_PDA_SEED: &[u8] = b"loyal-pda-test-dev";
 
 //TODO:
 //- Add a way to set msg_in, msg_out, state, turn
@@ -28,7 +28,7 @@ pub mod loyal_inference {
     }
 
     /// Delegate the account to the delegation program
-    pub fn delegate(ctx: Context<DelegateInput>) -> Result<()> {
+    pub fn delegate(ctx: Context<DelegateChat>) -> Result<()> {
         ctx.accounts.delegate_chat(
             &ctx.accounts.payer,
             &[TEST_PDA_SEED],
@@ -36,6 +36,17 @@ pub mod loyal_inference {
         )?;
         Ok(())
     }
+
+    // Get account from ER
+    // pub fn undelegate(ctx: Context<UndelegateChat>) -> Result<()> {
+    //     commit_and_undelegate_accounts(
+    //         &ctx.accounts.payer,
+    //         vec![&ctx.accounts.chat.to_account_info()],
+    //         &ctx.accounts.magic_context,
+    //         &ctx.accounts.magic_program,
+    //     )?;
+    //     Ok(())
+    // }
 
     // Send the query to oracle
     pub fn message_in(ctx: Context<MessageIn>, content: Vec<u8>) -> Result<()> {
@@ -64,7 +75,8 @@ pub struct Initialize<'info> {
 
 #[delegate]
 #[derive(Accounts)]
-pub struct DelegateInput<'info> {
+pub struct DelegateChat<'info> {
+    #[account(mut)]
     pub payer: Signer<'info>,
     /// CHECK The pda to delegate
     #[account(mut, del, seeds = [TEST_PDA_SEED], bump)]
@@ -86,4 +98,10 @@ pub struct LoyalChat {
     pub msg_out: Vec<u8>,
     pub processing: bool,
     pub user_turn: bool,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
+pub struct DelegateParams {
+    pub commit_frequency_ms: u32,
+    pub validator: Option<Pubkey>,
 }
