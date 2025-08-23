@@ -97,4 +97,16 @@ describe("loyal-inference", () => {
     const duration = Date.now() - start;
     console.log(`${duration}ms delegate txHash: ${tx}`);
   });
+
+  it("Undelegate chat from ER", async () => {
+    const start = Date.now();
+    let tx = await program.methods
+      .undelegate()
+      .accounts({
+        payer: anchor.getProvider().publicKey,
+      })
+      .rpc();
+    const duration = Date.now() - start;
+    console.log(`${duration}ms undelegate txHash: ${tx}`);
+  });
 });
