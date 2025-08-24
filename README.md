@@ -1,1 +1,2 @@
 # Loyal Permissionless Inference
+## Architecture
