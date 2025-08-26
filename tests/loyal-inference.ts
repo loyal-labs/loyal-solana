@@ -85,6 +85,28 @@ describe("loyal-inference", () => {
     expect(chat.userTurn).to.be.false;
   });
 
+  it("Send message from model to user", async () => {
+    const startTime = Date.now();
+    let msg = "I'm fine, thank you!";
+    let msgBuffer = Buffer.from(msg);
+
+    const txHash = await program.methods
+      .messageOut(msgBuffer)
+      .accounts({
+        payer: anchor.getProvider().publicKey,
+      })
+      .rpc();
+    const duration = Date.now() - startTime;
+    console.log(`${duration}ms (Base Layer) Message out txHash: ${txHash}`);
+
+    const chat = await program.account.loyalChat.fetch(pda);
+    let msgOut = chat.msgOut;
+    let msgOutString = Buffer.from(msgOut).toString();
+    expect(msgOutString).to.equal(msg);
+    expect(chat.processing).to.be.false;
+    expect(chat.userTurn).to.be.true;
+  });
+
   it("Delegate counter to ER", async () => {
     const start = Date.now();
 

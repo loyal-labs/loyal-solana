@@ -57,6 +57,15 @@ pub mod loyal_inference {
         msg!("Message in: {:?}", chat.msg_in);
         Ok(())
     }
+
+    pub fn message_out(ctx: Context<MessageIn>, content: Vec<u8>) -> Result<()> {
+        let chat = &mut ctx.accounts.chat;
+        chat.msg_out = content;
+        chat.processing = false;
+        chat.user_turn = true;
+        msg!("Message out: {:?}", chat.msg_out);
+        Ok(())
+    }
 }
 
 
