@@ -1,11 +1,11 @@
 use anchor_lang::prelude::*;
 use ephemeral_rollups_sdk::anchor::{commit, delegate, ephemeral};
 use ephemeral_rollups_sdk::cpi::DelegateConfig;
-use ephemeral_rollups_sdk::ephem::{commit_accounts, commit_and_undelegate_accounts};
+use ephemeral_rollups_sdk::ephem::{commit_and_undelegate_accounts};
 
 declare_id!("3ezv3YP5V83UP6KNqgHgt7NGE6JonkSK32nnbMyFEX4U");
 
-pub const TEST_PDA_SEED: &[u8] = b"loyal-pda-test-dev";
+pub const TEST_PDA_SEED: &[u8] = b"randomized-seed";
 
 //TODO:
 //- Add a way to set msg_in, msg_out, state, turn
@@ -27,24 +27,38 @@ pub mod loyal_inference {
         Ok(())
     }
 
-    /// Delegate the account to the delegation program
-    pub fn delegate(ctx: Context<DelegateChat>) -> Result<()> {
+    /// Delegate the chat account to the delegation program
+    pub fn delegate(ctx: Context<DelegateChat>, params: DelegateParams) -> Result<()> {
+        let config = DelegateConfig {
+            commit_frequency_ms: params.commit_frequency_ms,
+            validator: params.validator,
+        };
         ctx.accounts.delegate_chat(
+            &ctx.accounts.user,
+            &[TEST_PDA_SEED, ctx.accounts.user.key().to_bytes().as_slice()],
+            config, 
+        )?;
+        Ok(())
+    }
+ 
+
+    // Undelegate the chat account
+    pub fn undelegate(ctx: Context<Undelegate>) -> Result<()> {
+        commit_and_undelegate_accounts(
             &ctx.accounts.payer,
-            &[TEST_PDA_SEED],
-            DelegateConfig::default(), 
+            vec![&ctx.accounts.user.to_account_info()],
+            &ctx.accounts.magic_context,
+            &ctx.accounts.magic_program,
         )?;
         Ok(())
     }
 
-    // Get account from ER
-    pub fn undelegate(ctx: Context<UndelegateChat>) -> Result<()> {
-        commit_and_undelegate_accounts(
-            &ctx.accounts.payer,
-            vec![&ctx.accounts.chat.to_account_info()],
-            &ctx.accounts.magic_context,
-            &ctx.accounts.magic_program,
-        )?;
+    pub fn query_delegated(ctx: Context<QueryDelegated>, query: Vec<u8>) -> Result<()> {
+        let chat = &mut ctx.accounts.chat;
+        chat.msg_in = query;
+        //chat.processing = true;
+        //chat.user_turn = false;
+        msg!("Query: {:?}", chat.msg_in);
         Ok(())
     }
 
@@ -68,15 +82,23 @@ pub mod loyal_inference {
     }
 }
 
+#[account]
+pub struct LoyalChat {
+    pub msg_in: Vec<u8>,
+    pub msg_out: Vec<u8>,
+    pub processing: bool,
+    pub user_turn: bool,
+}
 
 //TODO:
-//-Use pre-allocation for msg_in and msg_out to reduce the space used
+//-Use array pre-allocation for msg_in and msg_out to reduce the space used
+//-Alternatively, use one array for streaming and change the status?
 #[derive(Accounts)]
 pub struct Initialize<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
 
-    #[account(init, payer = payer, space = 8 + 4 + 256 + 4 + 256 + 1 + 1, seeds = [TEST_PDA_SEED], bump)]
+    #[account(init_if_needed, payer = payer, space = 8 + 4 + 256 + 4 + 256 + 1 + 1, seeds = [TEST_PDA_SEED, payer.key().to_bytes().as_slice()], bump)]
     pub chat: Account<'info, LoyalChat>,
 
     pub system_program: Program<'info, System>,
@@ -86,27 +108,38 @@ pub struct Initialize<'info> {
 #[derive(Accounts)]
 pub struct DelegateChat<'info> {
     #[account(mut)]
-    pub payer: Signer<'info>,
+    pub user: Signer<'info>,
     /// CHECK The pda to delegate
-    #[account(mut, del, seeds = [TEST_PDA_SEED], bump)]
-    pub chat: AccountInfo<'info>,
+    #[account(mut, del, seeds = [TEST_PDA_SEED, user.key().to_bytes().as_slice()], bump)]
+    pub chat: Account<'info, LoyalChat>,
 }
+
+
+#[commit]
+#[derive(Accounts)]
+pub struct Undelegate<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    #[account(mut, seeds = [TEST_PDA_SEED, payer.key().to_bytes().as_slice()], bump)]
+    pub user: Account<'info, LoyalChat>,
+}
+
 
 #[derive(Accounts)]
 pub struct MessageIn<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
 
-    #[account(mut, seeds = [TEST_PDA_SEED], bump)]
+    #[account(mut, seeds = [TEST_PDA_SEED, payer.key().to_bytes().as_slice()], bump)]
     pub chat: Account<'info, LoyalChat>, 
 }
 
-#[account]
-pub struct LoyalChat {
-    pub msg_in: Vec<u8>,
-    pub msg_out: Vec<u8>,
-    pub processing: bool,
-    pub user_turn: bool,
+#[derive(Accounts)]
+pub struct QueryDelegated<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    #[account(seeds = [TEST_PDA_SEED, payer.key().to_bytes().as_slice()], bump)]
+    pub chat: Account<'info, LoyalChat>,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
@@ -115,12 +148,3 @@ pub struct DelegateParams {
     pub validator: Option<Pubkey>,
 }
 
-#[commit]
-#[derive(Accounts)]
-pub struct UndelegateChat<'info> {
-    #[account(mut)]
-    pub payer: Signer<'info>,
-
-    #[account(mut, seeds = [TEST_PDA_SEED], bump)]
-    pub chat: Account<'info, LoyalChat>,
-}
