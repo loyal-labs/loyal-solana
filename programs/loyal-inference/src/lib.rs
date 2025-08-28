@@ -8,7 +8,7 @@ declare_id!("3ezv3YP5V83UP6KNqgHgt7NGE6JonkSK32nnbMyFEX4U");
 pub const TEST_PDA_SEED: &[u8] = b"randomized-seed";
 
 //TODO:
-//- Add a way to set msg_in, msg_out, state, turn
+//-Make sure only creator and oracle can send messages
 
 #[ephemeral]
 #[program]
@@ -53,31 +53,12 @@ pub mod loyal_inference {
         Ok(())
     }
 
-    pub fn query_delegated(ctx: Context<QueryDelegated>, query: Vec<u8>) -> Result<()> {
+    pub fn query_delegated(ctx: Context<QueryDelegated>, query: Vec<u8>, processing: bool) -> Result<()> {
         let chat = &mut ctx.accounts.chat;
         chat.msg_in = query;
-        //chat.processing = true;
+        chat.processing = processing;
         //chat.user_turn = false;
         msg!("Query: {:?}", chat.msg_in);
-        Ok(())
-    }
-
-    // Send the query to oracle
-    pub fn message_in(ctx: Context<MessageIn>, content: Vec<u8>) -> Result<()> {
-        let chat = &mut ctx.accounts.chat;
-        chat.msg_in = content;
-        chat.processing = true;
-        chat.user_turn = false;
-        msg!("Message in: {:?}", chat.msg_in);
-        Ok(())
-    }
-
-    pub fn message_out(ctx: Context<MessageIn>, content: Vec<u8>) -> Result<()> {
-        let chat = &mut ctx.accounts.chat;
-        chat.msg_out = content;
-        chat.processing = false;
-        chat.user_turn = true;
-        msg!("Message out: {:?}", chat.msg_out);
         Ok(())
     }
 }
