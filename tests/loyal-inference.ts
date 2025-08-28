@@ -62,23 +62,6 @@ describe("loyal-inference", () => {
     console.log("Query: ", tx);
   });
 
-  it("Query model multiple times", async () => {
-    let attempts = 0;
-    const startTime = Date.now();
-
-    while (attempts < 10) {
-      const attemptStartTime = Date.now();
-      const msg = Buffer.from("hello");
-      const tx = await ephemeralProgram.methods.queryDelegated(msg).rpc();
-      console.log("Query: ", tx);
-      attempts++;
-      const duration = Date.now() - attemptStartTime;
-      console.log(`Attempt ${attempts} took ${duration}ms`);
-    }
-    const totalTime = Date.now() - startTime;
-    console.log(`Total time: ${totalTime}ms`);
-  });
-
   it("Undelegate chat from ER", async () => {
     const tx = await ephemeralProgram.methods.undelegate().rpc();
     console.log("Undelegate: ", tx);
