@@ -16,9 +16,10 @@ describe("loyal-inference", () => {
 
   const providerEphemeralRollup = new anchor.AnchorProvider(
     new anchor.web3.Connection(
-      process.env.PROVIDER_ENDPOINT || "https://devnet.magicblock.app/",
+      process.env.PROVIDER_ENDPOINT || "https://devnet-us.magicblock.app/",
       {
-        wsEndpoint: process.env.WS_ENDPOINT || "wss://devnet.magicblock.app/",
+        wsEndpoint:
+          process.env.WS_ENDPOINT || "wss://devnet-us.magicblock.app/",
         commitment: "processed",
       }
     ),
