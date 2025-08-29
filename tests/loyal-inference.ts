@@ -19,6 +19,7 @@ describe("loyal-inference", () => {
       process.env.PROVIDER_ENDPOINT || "https://devnet.magicblock.app/",
       {
         wsEndpoint: process.env.WS_ENDPOINT || "wss://devnet.magicblock.app/",
+        commitment: "processed",
       }
     ),
     anchor.Wallet.local()
@@ -45,25 +46,80 @@ describe("loyal-inference", () => {
     console.log("Initialize: ", tx);
   });
 
+  it("Query model on Solana", async () => {
+    const msg = Buffer.from("hello");
+    const processing = true;
+    const tx = await program.methods.query(msg, processing).rpc({
+      commitment: "processed",
+      skipPreflight: true,
+    });
+    console.log("Query: ", tx);
+  });
+
+  it("Measure latency for 10 queries", async () => {
+    const start = Date.now();
+    for (let i = 0; i < 10; i++) {
+      const queryStart = Date.now();
+      const msg = Buffer.from("hello");
+      const processing = true;
+      const tx = await program.methods.query(msg, processing).rpc({
+        commitment: "processed",
+        skipPreflight: true,
+      });
+      const queryEnd = Date.now();
+      const queryDuration = queryEnd - queryStart;
+      console.log(`Query ${i} duration: ${queryDuration}ms`);
+    }
+    const end = Date.now();
+    const duration = end - start;
+    console.log("Total duration: ", duration, "ms");
+  });
+
   it("Delegate chat to ER", async () => {
-    const validator = await getClosestValidator(provider.connection);
-    const tx = await program.methods
-      .delegate({
-        commitFrequencyMs: 30_000,
-        validator: validator,
-      })
-      .rpc();
+    const tx = await program.methods.delegate().rpc();
     console.log("Delegate: ", tx);
   });
 
   it("Query model on ER", async () => {
     const msg = Buffer.from("hello");
-    const tx = await ephemeralProgram.methods.queryDelegated(msg).rpc();
+    const processing = true;
+
+    const tx = await ephemeralProgram.methods
+      .queryDelegated(msg, processing)
+      .rpc({
+        commitment: "processed",
+        skipPreflight: true,
+      });
+
     console.log("Query: ", tx);
   });
 
+  it("Measure latency for 10 queries on ER", async () => {
+    const start = Date.now();
+    for (let i = 0; i < 10; i++) {
+      const queryStart = Date.now();
+      const msg = Buffer.from("hello");
+      const processing = true;
+      const tx = await ephemeralProgram.methods
+        .queryDelegated(msg, processing)
+        .rpc({
+          commitment: "processed",
+          skipPreflight: true,
+        });
+      const queryEnd = Date.now();
+      const queryDuration = queryEnd - queryStart;
+      console.log(`Query ${i} duration: ${queryDuration}ms`);
+    }
+    const end = Date.now();
+    const duration = end - start;
+    console.log("Total duration: ", duration, "ms");
+  });
+
   it("Undelegate chat from ER", async () => {
-    const tx = await ephemeralProgram.methods.undelegate().rpc();
+    const tx = await ephemeralProgram.methods.undelegate().rpc({
+      commitment: "processed",
+      skipPreflight: true,
+    });
     console.log("Undelegate: ", tx);
   });
 });

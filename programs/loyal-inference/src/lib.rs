@@ -1,7 +1,8 @@
 use anchor_lang::prelude::*;
 use ephemeral_rollups_sdk::anchor::{commit, delegate, ephemeral};
-use ephemeral_rollups_sdk::cpi::DelegateConfig;
 use ephemeral_rollups_sdk::ephem::{commit_and_undelegate_accounts};
+use ephemeral_rollups_sdk::cpi::DelegateConfig;
+
 
 declare_id!("3ezv3YP5V83UP6KNqgHgt7NGE6JonkSK32nnbMyFEX4U");
 
@@ -21,22 +22,18 @@ pub mod loyal_inference {
         chat.msg_out = vec![];
         chat.processing = false;
         chat.user_turn = true;
-
-        msg!("Chat initialized");
-
         Ok(())
     }
 
     /// Delegate the chat account to the delegation program
-    pub fn delegate(ctx: Context<DelegateChat>, params: DelegateParams) -> Result<()> {
-        let config = DelegateConfig {
-            commit_frequency_ms: params.commit_frequency_ms,
-            validator: params.validator,
-        };
+    pub fn delegate(ctx: Context<DelegateChat>) -> Result<()> {
         ctx.accounts.delegate_chat(
             &ctx.accounts.user,
             &[TEST_PDA_SEED, ctx.accounts.user.key().to_bytes().as_slice()],
-            config, 
+            DelegateConfig {
+                commit_frequency_ms: 30_000,
+                validator: Some(pubkey!("USQT2zbsRiK7dZqVzCktauygDXVAdAgWZbnHJyQo4TV")),
+            }, 
         )?;
         Ok(())
     }
@@ -53,12 +50,19 @@ pub mod loyal_inference {
         Ok(())
     }
 
+    pub fn query(ctx: Context<MessageIn>, query: Vec<u8>, processing: bool) -> Result<()> {
+        let chat = &mut ctx.accounts.chat;
+        chat.msg_in = query;
+        chat.processing = processing;
+        chat.user_turn = false;
+        Ok(())
+    }
+
     pub fn query_delegated(ctx: Context<QueryDelegated>, query: Vec<u8>, processing: bool) -> Result<()> {
         let chat = &mut ctx.accounts.chat;
         chat.msg_in = query;
         chat.processing = processing;
-        //chat.user_turn = false;
-        msg!("Query: {:?}", chat.msg_in);
+        chat.user_turn = false;
         Ok(())
     }
 }
@@ -122,10 +126,3 @@ pub struct QueryDelegated<'info> {
     #[account(seeds = [TEST_PDA_SEED, payer.key().to_bytes().as_slice()], bump)]
     pub chat: Account<'info, LoyalChat>,
 }
-
-#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
-pub struct DelegateParams {
-    pub commit_frequency_ms: u32,
-    pub validator: Option<Pubkey>,
-}
-
