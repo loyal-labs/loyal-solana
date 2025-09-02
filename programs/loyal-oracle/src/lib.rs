@@ -200,7 +200,7 @@ pub mod loyal_oracle {
 }
 
 /// *******************
-/// accounts we need for each instruction
+/// accounts for instructions
 /// *******************
 
 #[derive(Accounts)]

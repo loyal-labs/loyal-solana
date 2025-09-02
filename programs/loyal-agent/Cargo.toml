@@ -1,12 +1,12 @@
 [package]
-name = "loyal-inference"
+name = "loyal-agent"
 version = "0.1.0"
 description = "Created with Anchor"
 edition = "2021"
 
 [lib]
 crate-type = ["cdylib", "lib"]
-name = "loyal_inference"
+name = "loyal_agent"
 
 [features]
 default = []
@@ -16,7 +16,6 @@ no-idl = []
 no-log-ix-name = []
 idl-build = ["anchor-lang/idl-build"]
 
-
 [dependencies]
-anchor-lang = { version = "^0", features = ["init-if-needed"] }
-ephemeral-rollups-sdk = { version = "^0", features = ["anchor"] }
+anchor-lang = "^0"
+loyal-oracle = { path = "../loyal-oracle", features = ["cpi"] }
