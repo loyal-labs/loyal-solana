@@ -39,3 +39,8 @@ upgradeable = false
 address = "DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh"
 program = "tests/fixtures/dlp.so"
 upgradeable = false
+
+[[test.genesis]]
+address = "BTWAqWNBmF2TboMh3fxMJfgR16xGHYD7Kgr2dPwbRPBi"
+program = "tests/fixtures/permission.so"
+upgradeable = false
