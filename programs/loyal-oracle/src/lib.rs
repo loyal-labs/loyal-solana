@@ -3,33 +3,31 @@ use anchor_lang::prelude::*;
 use anchor_lang::solana_program::instruction::Instruction;
 use anchor_lang::solana_program::program::invoke_signed;
 use ephemeral_rollups_sdk::anchor::{delegate, ephemeral};
+use ephemeral_rollups_sdk::ephem::{commit_and_undelegate_accounts};
 use ephemeral_rollups_sdk::cpi::DelegateConfig;
 
-declare_id!("LLMrieZMpbJFwN52WgmBNMxYojrpRVYXdC1RCweEbab");
+declare_id!("9Sg7UG96gVEPChRdT5Y6DKeaiMV5eTYm1phsWArna98t");
 
-const LOYAL_ORACLE_ADDRESS: Pubkey = pubkey!("62JLkPeE4oG65LRB3W3m52RVicmYq3xFHdv7TecCsPj5");
+const ORACLE_IDENTITY: Pubkey = pubkey!("62JLkPeE4oG65LRB3W3m52RVicmYq3xFHdv7TecCsPj5");
 
 #[ephemeral]
 #[program]
 pub mod loyal_oracle {
     use super::*;
 
-    // init identity and counter
     pub fn initialize(_ctx: Context<Initialize>) -> Result<()> {
         Ok(())
     }
 
-    // container for a convo
-    pub fn create_chat(ctx: Context<CreateChat>, text: String) -> Result<()> {
+    pub fn create_context(ctx: Context<CreateContext>, text: String) -> Result<()> {
         let context_account = &mut ctx.accounts.context_account;
         context_account.text = text;
         ctx.accounts.counter.count += 1;
         Ok(())
     }
 
-    // creates `Interaction` or resizes it to store query
-    pub fn query(
-        ctx: Context<Query>,
+    pub fn interact_with_llm(
+        ctx: Context<InteractWithLlm>,
         text: String,
         callback_program_id: Pubkey,
         callback_discriminator: [u8; 8],
@@ -46,7 +44,6 @@ pub mod loyal_oracle {
         let payer_info = ctx.accounts.payer.to_account_info();
         let system_program_info = ctx.accounts.system_program.to_account_info();
 
-        // if it doesn't exist, create it
         if interaction_info.owner.eq(&anchor_lang::system_program::ID) {
             let create_instruction =
                 anchor_lang::solana_program::system_instruction::create_account(
@@ -76,7 +73,6 @@ pub mod loyal_oracle {
                 signer_seeds,
             )?;
         } else {
-            // reallocate space for new data
             additional_rent = additional_rent.saturating_sub(rent.minimum_balance(current_len));
             interaction_info.realloc(space, false)?;
             if additional_rent > 0 {
@@ -91,7 +87,6 @@ pub mod loyal_oracle {
             }
         }
 
-        // deserialize and populate data
         let mut interaction_data = interaction.try_borrow_mut_data()?;
         let mut interaction =
             Interaction::try_deserialize_unchecked(&mut interaction_data.as_ref())
@@ -109,19 +104,17 @@ pub mod loyal_oracle {
         Ok(())
     }
 
-    // called to deliver a response from a trusted oracle
-    pub fn callback<'info>(
-        ctx: Context<'_, '_, '_, 'info, Callback<'info>>,
+    pub fn callback_from_llm<'info>(
+        ctx: Context<'_, '_, '_, 'info, CallbackFromLlm<'info>>,
         response: String,
     ) -> Result<()> {
-        // prep discriminator to response data
         let response_data = [
             ctx.accounts.interaction.callback_discriminator.to_vec(),
             response.try_to_vec()?,
         ]
         .concat();
 
-        // accounts for CPI
+        // Prepare accounts metas
         let mut accounts_metas: Vec<anchor_lang::solana_program::instruction::AccountMeta> =
             vec![anchor_lang::solana_program::instruction::AccountMeta {
                 pubkey: ctx.accounts.identity.key(),
@@ -142,7 +135,7 @@ pub mod loyal_oracle {
                 ),
         );
 
-        // security check: ensure oracle is not in remaining acc
+        // Verify payer is not in remaining accounts
         if ctx
             .remaining_accounts
             .iter()
@@ -164,8 +157,6 @@ pub mod loyal_oracle {
         remaining_accounts.push(ctx.accounts.identity.to_account_info());
         remaining_accounts.push(ctx.accounts.program.to_account_info());
         let identity_bump = ctx.bumps.identity;
-        
-        // shows cpi is from here
         invoke_signed(
             &instruction,
             &remaining_accounts,
@@ -174,9 +165,7 @@ pub mod loyal_oracle {
         Ok(())
     }
 
-
-    // checks if response is from pda
-    pub fn verify_response(ctx: Context<VerifyResponse>, response: String) -> Result<()> {
+    pub fn callback_from_oracle(ctx: Context<CallbackFromOracle>, response: String) -> Result<()> {
         if !ctx.accounts.identity.to_account_info().is_signer {
             return Err(ProgramError::InvalidAccountData.into());
         }
@@ -184,8 +173,7 @@ pub mod loyal_oracle {
         Ok(())
     }
 
-    // delegate to ER
-    pub fn delegate(ctx: Context<DelegateChat>) -> Result<()> {
+    pub fn delegate_interaction(ctx: Context<DelegateInteraction>) -> Result<()> {
         ctx.accounts.delegate_interaction(
             &ctx.accounts.payer,
             &[
@@ -193,22 +181,24 @@ pub mod loyal_oracle {
                 &ctx.accounts.payer.key().to_bytes(),
                 &ctx.accounts.context_account.key().to_bytes(),
             ],
-            DelegateConfig::default(),
+            DelegateConfig {
+                commit_frequency_ms: 0,
+                validator: Some(pubkey!("USQT2zbsRiK7dZqVzCktauygDXVAdAgWZbnHJyQo4TV")),
+            }, 
         )?;
         Ok(())
     }
+
 }
 
-/// *******************
-/// accounts for instructions
-/// *******************
+/// Contexts
 
 #[derive(Accounts)]
 pub struct Initialize<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
     #[account(
-        init,
+        init_if_needed,
         payer = payer,
         space = 8,
         seeds = [b"identity"],
@@ -216,7 +206,7 @@ pub struct Initialize<'info> {
     )]
     pub identity: Account<'info, Identity>,
     #[account(
-        init,
+        init_if_needed,
         payer = payer,
         space = 8 + 32,
         seeds = [b"counter"],
@@ -228,7 +218,7 @@ pub struct Initialize<'info> {
 
 #[derive(Accounts)]
 #[instruction(text: String)]
-pub struct CreateChat<'info> {
+pub struct CreateContext<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
     #[account(mut,
@@ -237,7 +227,7 @@ pub struct CreateChat<'info> {
     )]
     pub counter: Account<'info, Counter>,
     #[account(
-        init,
+        init_if_needed,
         payer = payer,
         space = 8 + text.as_bytes().len() + 8,
         seeds = [ContextAccount::seed(), &counter.count.to_le_bytes()],
@@ -249,7 +239,7 @@ pub struct CreateChat<'info> {
 
 #[derive(Accounts)]
 #[instruction(text: String, callback_program_id: Pubkey, callback_discriminator: [u8; 8], account_metas: Option<Vec<AccountMeta>>)]
-pub struct Query<'info> {
+pub struct InteractWithLlm<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
     /// CHECK: the correct interaction account
@@ -265,31 +255,27 @@ pub struct Query<'info> {
 }
 
 #[derive(Accounts)]
-pub struct Callback<'info> {
-    /// only loyal oracle can call this
-    #[account(mut, address = LOYAL_ORACLE_ADDRESS)]
+pub struct CallbackFromLlm<'info> {
+    #[account(mut, address = ORACLE_IDENTITY)]
     pub payer: Signer<'info>,
-
     #[account(seeds = [b"identity"], bump)]
     pub identity: Account<'info, Identity>,
-
     /// CHECK: we accept any context
     #[account(mut)]
     pub interaction: Account<'info, Interaction>,
-
     /// CHECK: the callback program
     pub program: AccountInfo<'info>,
 }
 
 #[derive(Accounts)]
-pub struct VerifyResponse<'info> {
+pub struct CallbackFromOracle<'info> {
     #[account(seeds = [b"identity"], bump)]
     pub identity: Account<'info, Identity>,
 }
 
 #[delegate]
 #[derive(Accounts)]
-pub struct DelegateChat<'info> {
+pub struct DelegateInteraction<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
     /// CHECK: the correct interaction account
@@ -298,14 +284,12 @@ pub struct DelegateChat<'info> {
         seeds = [Interaction::seed(), payer.key().as_ref(), context_account.key().as_ref()],
         bump
     )]
-    pub interaction: AccountInfo<'info>,
+    pub interaction: AccountInfo<'info>, 
     /// CHECK: we accept any context
-    pub context_account: Account<'info, ContextAccount>,
+    pub context_account: AccountInfo<'info>,
 }
 
-/// *******************
-/// data structures  
-/// *******************
+/// Accounts
 
 #[account]
 pub struct ContextAccount {
@@ -318,7 +302,6 @@ impl ContextAccount {
     }
 }
 
-/// query/response data structure
 #[account]
 #[derive(Default, Debug)]
 pub struct Interaction {
@@ -336,13 +319,11 @@ impl Interaction {
         b"interaction"
     }
 
-    /// calc req space
     pub fn space(text: &String, account_metas_len: usize) -> usize {
         121 + text.as_bytes().len() + account_metas_len * AccountMeta::size()
     }
 }
 
-/// store info in account
 #[derive(InitSpace, AnchorSerialize, AnchorDeserialize, Clone, Debug)]
 pub struct AccountMeta {
     pub pubkey: Pubkey,
@@ -361,6 +342,5 @@ pub struct Counter {
     pub count: u32,
 }
 
-/// pda to sign CPI
 #[account]
 pub struct Identity {}

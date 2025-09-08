@@ -1,5 +1,5 @@
 [workspace]
-members = ["programs/*"]
+members = ["programs/loyal-chat", "programs/loyal-oracle"]
 resolver = "2"
 
 [profile.release]

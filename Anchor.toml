@@ -8,19 +8,34 @@ resolution = true
 skip-lint = false
 
 [programs.devnet]
-loyal-agent = "7JD7sixsC9bAbCttL1MxbrfNauXjVsAZciGzuicivons"
-loyal-inference = "3ezv3YP5V83UP6KNqgHgt7NGE6JonkSK32nnbMyFEX4U"
+loyal-inference = "56wz9nvWpZE9t4GawPCMC7gHCaJKz53WsCWrasSCbiBJ"
 loyal-oracle = "9Sg7UG96gVEPChRdT5Y6DKeaiMV5eTYm1phsWArna98t"
 
 [programs.localnet]
-loyal-inference = "3ezv3YP5V83UP6KNqgHgt7NGE6JonkSK32nnbMyFEX4U"
+loyal-inference = "56wz9nvWpZE9t4GawPCMC7gHCaJKz53WsCWrasSCbiBJ"
+loyal-oracle = "9Sg7UG96gVEPChRdT5Y6DKeaiMV5eTYm1phsWArna98t"
 
 [registry]
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "devnet"
+cluster = "localnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]
 test = "bun run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
+
+[test]
+startup_wait = 5000
+shutdown_wait = 2000
+upgradeable = false
+
+[[test.genesis]]
+address = "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s"
+program = "tests/fixtures/metadata.so"
+upgradeable = false
+
+[[test.genesis]]
+address = "DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh"
+program = "tests/fixtures/dlp.so"
+upgradeable = false
