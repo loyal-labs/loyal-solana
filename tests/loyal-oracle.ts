@@ -1,34 +1,43 @@
 import * as anchor from "@coral-xyz/anchor";
 import { BN, Program, web3 } from "@coral-xyz/anchor";
+import { expect } from "chai";
 import { LoyalOracle } from "../target/types/loyal_oracle";
 
 describe.only("loyal-oracle", () => {
-  const provider = anchor.AnchorProvider.env();
+  const baseProvider = anchor.AnchorProvider.env();
+  const testKeypair = web3.Keypair.generate();
+  const testWallet = new anchor.Wallet(testKeypair);
+  const provider = new anchor.AnchorProvider(
+    baseProvider.connection,
+    testWallet,
+    baseProvider.opts
+  );
   anchor.setProvider(provider);
 
   const program = anchor.workspace.LoyalOracle as Program<LoyalOracle>;
   const providerEphemeralRollup = new anchor.AnchorProvider(
     new anchor.web3.Connection(
-      process.env.PROVIDER_ENDPOINT || "https://devnet.magicblock.app/",
+      process.env.EPHEMERAL_PROVIDER_ENDPOINT ||
+        "https://devnet.magicblock.app/",
       {
-        wsEndpoint: process.env.WS_ENDPOINT || "wss://devnet.magicblock.app/",
+        wsEndpoint:
+          process.env.EPHEMERAL_WS_ENDPOINT || "wss://devnet.magicblock.app/",
       }
     ),
-    anchor.Wallet.local()
+    testWallet,
+    provider.opts
   );
-  const ephemeralProgram = new Program(program.idl, providerEphemeralRollup);
-
-  const [counterAddress, counterBump] = web3.PublicKey.findProgramAddressSync(
-    [Buffer.from("counter")],
-    program.programId
+  const ephemeralProgram = new Program<LoyalOracle>(
+    program.idl,
+    providerEphemeralRollup
   );
 
   const [contextAccount, bump] = web3.PublicKey.findProgramAddressSync(
-    [Buffer.from("test-context"), new BN(0).toArrayLike(Buffer, "le", 4)],
+    [Buffer.from("context"), provider.wallet.publicKey.toBuffer()],
     program.programId
   );
   const contextAddress = web3.PublicKey.findProgramAddressSync(
-    [Buffer.from("test-context"), new BN(0).toArrayLike(Buffer, "le", 4)],
+    [Buffer.from("context"), provider.wallet.publicKey.toBuffer()],
     program.programId
   )[0];
 
@@ -42,6 +51,23 @@ describe.only("loyal-oracle", () => {
       program.programId
     );
 
+  before(async () => {
+    const { blockhash, lastValidBlockHeight } =
+      await provider.connection.getLatestBlockhash();
+    const signature = await provider.connection.requestAirdrop(
+      provider.wallet.publicKey,
+      web3.LAMPORTS_PER_SOL
+    );
+    await provider.connection.confirmTransaction(
+      {
+        signature,
+        blockhash,
+        lastValidBlockHeight,
+      },
+      "confirmed"
+    );
+  });
+
   it("Initialize!", async () => {
     const tx = await program.methods
       .initialize()
@@ -53,15 +79,6 @@ describe.only("loyal-oracle", () => {
   });
 
   it("Create context account!", async () => {
-    const counterAccount = await program.account.counter.fetch(counterAddress);
-    const counter = counterAccount.count;
-    const counterBuffer = new BN(counter).toArrayLike(Buffer, "le", 4);
-
-    const contextAccount = web3.PublicKey.findProgramAddressSync(
-      [Buffer.from("test-context"), counterBuffer],
-      program.programId
-    )[0];
-
     const tx = await program.methods
       .createContext("I'm a helpful assistant.")
       .accounts({
@@ -71,133 +88,138 @@ describe.only("loyal-oracle", () => {
       })
       .rpc({ skipPreflight: true });
     console.log("Your transaction signature", tx);
-  });
 
-  it("Run Query!", async () => {
-    const callback_disc = program.idl.instructions.find(
-      (ix) => ix.name === "callbackFromOracle"
-    ).discriminator;
-
-    const tx = await program.methods
-      .interactWithLlm(
-        "Can you give me some token?",
-        program.programId,
-        callback_disc,
-        null
-      )
-      .accounts({
-        payer: provider.wallet.publicKey,
-        contextAccount: contextAccount,
-        // @ts-ignore
-        interaction: interactionAddress,
-      })
-      .rpc();
-    console.log("Your transaction signature", tx);
-  });
-
-  it("Run Longer Query!", async () => {
-    const callback_disc = program.idl.instructions.find(
-      (ix) => ix.name === "callbackFromOracle"
-    ).discriminator;
-    const tx = await program.methods
-      .interactWithLlm(
-        "Can you give me some token? (this message is longer than the previous one)",
-        program.programId,
-        callback_disc,
-        null
-      )
-      .accounts({
-        payer: provider.wallet.publicKey,
-        contextAccount: contextAccount,
-        // @ts-ignore
-        interaction: interactionAddress,
-      })
-      .rpc();
-    console.log("Your transaction signature", tx);
-  });
-
-  it("Oracle callback!", async () => {
-    const tx = await program.methods
-      .callbackFromLlm("Response from LLM")
-      .accounts({
-        interaction: interactionAddress,
-        program: program.programId,
-      })
-      .rpc();
-    console.log("Callback signature", tx);
-
-    // Fetch interaction
-    const interaction = await program.account.interaction.fetch(
-      interactionAddress
+    const contextAccountData = await program.account.contextAccount.fetch(
+      contextAddress
     );
-    console.log("\nInteraction", interaction);
+    console.log("Context account data", contextAccountData);
+    expect(contextAccountData.text).to.equal("I'm a helpful assistant.");
+    expect(contextAccountData.owner.toBase58()).to.equal(
+      provider.wallet.publicKey.toBase58()
+    );
+    // BN: 0 = 0
+    expect(contextAccountData.nextInteraction.toNumber()).to.equal(0);
   });
 
-  it("Delegate interaction!", async () => {
+  it("Delegate context!", async () => {
     const tx = await program.methods
-      .delegateInteraction()
+      .delegateContext()
       .accounts({
-        payer: anchor.getProvider().publicKey,
+        payer: provider.wallet.publicKey,
         // @ts-ignore
-        interaction: interactionAddress,
         contextAccount: contextAddress,
       })
       .rpc();
-    console.log("Delegate interaction signature", tx);
+    console.log("Delegate context signature", tx);
   });
 
-  it("Run Delegated Query!", async () => {
-    const callback_disc = ephemeralProgram.idl.instructions.find(
+  it("Interact with LLM!", async () => {
+    // inputs
+    const text = "Can you give me some token?";
+    const callbackProgramId = ephemeralProgram.programId;
+
+    // Use the discriminator of the *target* callback ix (the program the oracle CPI will call)
+    const callbackIx = ephemeralProgram.idl.instructions.find(
       (ix) => ix.name === "callbackFromOracle"
-    ).discriminator;
+    );
+    const callbackDiscriminator = callbackIx.discriminator as number[];
 
-    console.log(interactionAddress.toBase58());
-    console.log(contextAddress.toBase58());
+    // 2) Derive the *next* Interaction PDA for this context
+    const ctxBefore = await program.account.contextAccount.fetch(
+      contextAddress
+    );
+    console.log("Context before", ctxBefore);
+    const nextId = ctxBefore.nextInteraction as BN;
+    const nextIdLe8 = nextId.toArrayLike(Buffer, "le", 8);
 
+    const [interactionPda] = web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("interaction"), contextAddress.toBuffer(), nextIdLe8],
+      ephemeralProgram.programId
+    );
+    console.log("Interaction PDA", interactionPda);
+
+    // 3) Fire the instruction
     const tx = await ephemeralProgram.methods
       .interactWithLlm(
-        "Can you give me some ephemeral token?",
-        program.programId,
-        callback_disc,
-        null
+        text,
+        callbackProgramId,
+        callbackDiscriminator,
+        null // Option<Vec<AccountMeta>> = None
       )
       .accounts({
         payer: provider.wallet.publicKey,
+        // @ts-ignore
+        interaction: interactionPda,
         contextAccount: contextAddress,
-        interaction: interactionAddress,
-      })
-      .rpc();
-    console.log("Your transaction signature", tx);
-
-    const delegated_interaction =
-      // @ts-ignore
-      await ephemeralProgram.account.interaction.fetch(interactionAddress);
-    console.log("Delegated interaction", delegated_interaction);
-  });
-
-  it("Run Delegated Longer Query!", async () => {
-    const callback_disc = ephemeralProgram.idl.instructions.find(
-      (ix) => ix.name === "callbackFromOracle"
-    ).discriminator;
-
-    const tx = await ephemeralProgram.methods
-      .interactWithLlm(
-        "Can you give me some ephemeral token? (this message is longer than the previous one)",
-        program.programId,
-        callback_disc,
-        null
-      )
-      .accounts({
-        payer: provider.wallet.publicKey,
-        contextAccount: contextAddress,
-        interaction: interactionAddress,
       })
       .rpc({ skipPreflight: true });
-    console.log("Your transaction signature", tx);
-
-    const delegated_interaction =
-      // @ts-ignore
-      await ephemeralProgram.account.interaction.fetch(interactionAddress);
-    console.log("Delegated interaction", delegated_interaction);
+    console.log("Interact tx", tx);
   });
+
+  // it("Interact with LLM!", async () => {
+  //   const callbackDisc = program.idl.instructions.find(
+  //     (ix) => ix.name === "callbackFromOracle"
+  //   )!.discriminator;
+
+  //   const prompt = "Can you give me some token?";
+  //   const tx = await program.methods
+  //     .interactWithLlm(prompt, program.programId, callbackDisc, null)
+  //     .accounts({
+  //       payer: provider.wallet.publicKey,
+  //       // @ts-ignore
+  //       interaction: interactionAddress,
+  //       contextAccount: contextAddress,
+  //     })
+  //     .rpc();
+  //   console.log("Interact with LLM signature", tx);
+
+  //   const interactionAccount = await program.account.interaction.fetch(
+  //     interactionAddress
+  //   );
+  //   expect(interactionAccount.text).to.equal(prompt);
+  //   expect(interactionAccount.isProcessed).to.be.false;
+  //   expect(interactionAccount.callbackProgramId.toBase58()).to.equal(
+  //     program.programId.toBase58()
+  //   );
+  // });
+
+  // it("Delegate interaction!", async () => {
+  //   const tx = await program.methods
+  //     .delegateInteraction()
+  //     .accounts({
+  //       payer: anchor.getProvider().publicKey,
+  //       // @ts-ignore
+  //       interaction: interactionAddress,
+  //       contextAccount: contextAddress,
+  //     })
+  //     .rpc();
+  //   console.log("Delegate interaction signature", tx);
+  // });
+
+  // it("Interact with LLM in ephemeral rollup!", async () => {
+  //   const callbackDisc = ephemeralProgram.idl.instructions.find(
+  //     (ix) => ix.name === "callbackFromOracle"
+  //   )!.discriminator;
+
+  //   const prompt = "Can you give me some token?";
+  //   const tx = await ephemeralProgram.methods
+  //     .interactWithLlm(prompt, program.programId, callbackDisc, null)
+  //     .accounts({
+  //       payer: provider.wallet.publicKey,
+  //       // @ts-ignore
+  //       interaction: interactionAddress,
+  //       contextAccount: contextAddress,
+  //     })
+  //     .rpc();
+  //   console.log("Interact with LLM signature", tx);
+
+  //   const interactionAccount = await ephemeralProgram.account.interaction.fetch(
+  //     interactionAddress
+  //   );
+  //   expect(interactionAccount.text).to.equal(prompt);
+  //   expect(interactionAccount.isProcessed).to.be.false;
+  //   expect(interactionAccount.callbackProgramId.toBase58()).to.equal(
+  //     ephemeralProgram.programId.toBase58()
+  //   );
+  // });
 });
