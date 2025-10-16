@@ -10,10 +10,15 @@ declare_id!("9Sg7UG96gVEPChRdT5Y6DKeaiMV5eTYm1phsWArna98t");
 
 const ORACLE_IDENTITY: Pubkey = pubkey!("62JLkPeE4oG65LRB3W3m52RVicmYq3xFHdv7TecCsPj5");
 
-pub const STATUS_PENDING: u8 = 0;
-pub const STATUS_DONE:    u8 = 1;
-pub const STATUS_ERROR:   u8 = 2;
+pub const STATUS_WAITING_FOR_DELEGATION: u8 = 0;
+pub const STATUS_PENDING: u8 = 1;
+pub const STATUS_DONE:    u8 = 2;
+pub const STATUS_ERROR:   u8 = 3;
 pub const MAX_RESPONSE_LEN: usize = 4096;
+pub const MAX_TEXT_LEN: usize = 2048;
+pub const MAX_ACCOUNT_METAS: usize = 8;
+pub const MAX_CALLBACK_METAS: usize = 8; 
+pub const INTERACTION_SEED: &[u8] = b"interaction";
 
 
 #[error_code]
@@ -26,6 +31,36 @@ pub enum CustomError {
     ResponseTooLong,
     #[msg("Context owner mismatch")]
     ContextOwnerMismatch,
+    #[msg("Illegal signer meta.")]
+    IllegalSignerMeta,
+    #[msg("Missing remaining account.")]
+    MissingRemainingAccount,
+    #[msg("Writability mismatch.")]
+    WritabilityMismatch,
+    #[msg("Oracle must not appear in remaining accounts.")]
+    OracleMustNotAppearInRemaining,
+    #[msg("Identity must be a signer.")]
+    IdentityNotSigner,
+    #[msg("Program is not executable.")]
+    ProgramNotExecutable,
+    #[msg("Unauthorized.")]
+    Unauthorized
+}
+
+#[error_code]
+pub enum ErrorCode {
+    #[msg("Provided interaction_id is not the next available id for creation.")]
+    InvalidInteractionId,
+    #[msg("Interaction id does not match the PDA being updated.")]
+    IdMismatch,
+    #[msg("Context account does not match the interaction's context.")]
+    ContextMismatch,
+    #[msg("Supplied text exceeds MAX_TEXT.")]
+    TextTooLong,
+    #[msg("Too many callback account metas.")]
+    TooManyMetas,
+    #[msg("Arithmetic overflow.")]
+    MathOverflow
 }
 
 #[ephemeral]
@@ -37,75 +72,79 @@ pub mod loyal_oracle {
         Ok(())
     }
 
-    pub fn create_context(ctx: Context<CreateContext>, text: String) -> Result<()> {
+    pub fn create_context(ctx: Context<CreateContext>) -> Result<()> {
         let c = &mut ctx.accounts.context_account;
         c.owner = ctx.accounts.payer.key();
         c.next_interaction = 0;
-        c.text = text;
 
         Ok(())
     }
 
     pub fn interact_with_llm(
         ctx: Context<InteractWithLlm>,
-        text: String,
+        interaction_id: u64,
+        text: Option<String>,
         callback_program_id: Pubkey,
         callback_discriminator: [u8; 8],
-        account_metas: Option<Vec<AccountMeta>>,
+        account_metas: Option<Vec<StoredAccountMeta>>,
     ) -> Result<()> {
-        let interaction_ai = ctx.accounts.interaction.to_account_info();
-        let payer_ai = ctx.accounts.payer.to_account_info();
-        let system_ai = ctx.accounts.system_program.to_account_info();
+        let i = &mut ctx.accounts.interaction;
 
-        // allocate account sized for query + max response (no future realloc)
-        let space = Interaction::space(&text, account_metas.as_ref().map_or(0, |v| v.len()));
-        let rent = Rent::get()?;
-        let lamports = rent.minimum_balance(space);
+        // Detect whether this was freshly created by `init_if_needed`.
+        // After a real init, all fields are zeroed except discriminator.
+        let is_new = i.created_at == 0;
 
-        // fresh create each time: one PDA per query
-        let create_ix = anchor_lang::solana_program::system_instruction::create_account(
-            &ctx.accounts.payer.key(),
-            &ctx.accounts.interaction.key(),
-            lamports,
-            space as u64,
-            &crate::ID,
-        );
+        if is_new {
+            // For creation, require the caller to use the "next" id
+            require!(
+                interaction_id == ctx.accounts.context_account.next_interaction,
+                ErrorCode::InvalidInteractionId
+            );
 
-        let context_account_seed = ctx.accounts.context_account.key();
-
-        let seeds: &[&[&[u8]]] = &[&[
-            Interaction::seed(),
-            context_account_seed.as_ref(),
-            &ctx.accounts.context_account.next_interaction.to_le_bytes(),
-            &[ctx.bumps.interaction],
-        ]];
-
-        anchor_lang::solana_program::program::invoke_signed(
-            &create_ix,
-            &[payer_ai.clone(), interaction_ai.clone(), system_ai.clone()],
-            seeds,
-        )?;
-
-        // write the new interaction
-        {
-            let mut data = interaction_ai.try_borrow_mut_data()?;
-            let mut i = Interaction::try_deserialize_unchecked(&mut data.as_ref()).unwrap_or_default();
+            i.id = interaction_id;
             i.context = ctx.accounts.context_account.key();
             i.user = ctx.accounts.payer.key();
             i.created_at = Clock::get()?.unix_timestamp;
-            i.id = ctx.accounts.context_account.next_interaction;
-            i.text = text;
-            i.callback_program_id = callback_program_id;
-            i.callback_discriminator = callback_discriminator;
-            i.callback_account_metas = account_metas.unwrap_or_default();
-            i.status = STATUS_PENDING;
-            i.response = String::new();
-            i.try_serialize(&mut data.as_mut())?;
+            i.response.clear();
+
+            // On first initialize we also ensure the text starts empty if no input provided.
+            if text.is_none() {
+                i.status = STATUS_WAITING_FOR_DELEGATION;
+                i.text.clear();
+            }
+        } else {
+            // Sanity on update path
+            require_eq!(i.id, interaction_id, ErrorCode::IdMismatch);
+            require_keys_eq!(i.context, ctx.accounts.context_account.key(), ErrorCode::ContextMismatch);
         }
 
-        // next query will create a NEW interaction PDA
-        ctx.accounts.context_account.next_interaction = 
-            ctx.accounts.context_account.next_interaction.checked_add(1).unwrap();
+        // Apply fields that can be set on both create & update:
+
+        // Text + status
+        if let Some(t) = text {
+            require!(t.len() <= MAX_TEXT_LEN, ErrorCode::TextTooLong);
+            i.status = STATUS_PENDING;
+            i.text = t;
+        } else {
+            i.status = STATUS_WAITING_FOR_DELEGATION;
+            i.text.clear();
+        }
+
+        // Callback wiring
+        let metas = account_metas.unwrap_or_default();
+        require!(metas.len() <= MAX_ACCOUNT_METAS, ErrorCode::TooManyMetas);
+        i.callback_program_id = callback_program_id;
+        i.callback_discriminator = callback_discriminator;
+        i.callback_account_metas = metas;
+
+        // Only advance the counter if we truly created a new PDA in this call
+        if is_new {
+            ctx.accounts.context_account.next_interaction =
+                ctx.accounts.context_account
+                    .next_interaction
+                    .checked_add(1)
+                    .ok_or(ErrorCode::MathOverflow)?;
+        }
 
         Ok(())
     }
@@ -115,81 +154,110 @@ pub mod loyal_oracle {
         response: String,
         is_processed: bool,
     ) -> Result<()> {
-        // Verify callback program id
+        // only our oracle signer may call this
+        require_keys_eq!(
+            ctx.accounts.oracle_signer.key(),
+            ORACLE_IDENTITY,
+            CustomError::Unauthorized
+        );
+
+        // Verify the intended callback program matches what was recorded on the interaction
         require_keys_eq!(
             ctx.accounts.program.key(),
             ctx.accounts.interaction.callback_program_id,
             CustomError::WrongCallbackProgram
         );
-        require!(!ctx.accounts.interaction.status == STATUS_DONE, CustomError::AlreadyProcessed);
+        require!(ctx.accounts.program.executable, CustomError::ProgramNotExecutable);
+
+        // Don’t allow double-processing
+        require!(
+            ctx.accounts.interaction.status != STATUS_DONE,
+            CustomError::AlreadyProcessed
+        );
 
         // persist the response into the interaction PDA
         require!(response.as_bytes().len() <= MAX_RESPONSE_LEN, CustomError::ResponseTooLong);
+
         let interaction = &mut ctx.accounts.interaction;
         interaction.response = response.clone();
         interaction.status = if is_processed { STATUS_DONE } else { STATUS_PENDING };
 
-        let response_data = [
-            ctx.accounts.interaction.callback_discriminator.to_vec(),
-            response.try_to_vec()?,
+        // CPI data: discriminator + borsh(args)
+        let args = CallbackArgs { response, is_processed };
+        let data = [
+            interaction.callback_discriminator.to_vec(), 
+            args.try_to_vec()?, 
         ]
         .concat();
 
-        // Prepare accounts metas
-        let mut accounts_metas: Vec<anchor_lang::solana_program::instruction::AccountMeta> =
-            vec![anchor_lang::solana_program::instruction::AccountMeta {
-                pubkey: ctx.accounts.identity.key(),
-                is_signer: true,
-                is_writable: false,
-            }];
-        accounts_metas.extend(
-            ctx.accounts
-                .interaction
-                .callback_account_metas
-                .iter()
-                .map(
-                    |meta| anchor_lang::solana_program::instruction::AccountMeta {
-                        pubkey: meta.pubkey,
-                        is_signer: meta.is_signer,
-                        is_writable: meta.is_writable,
-                    },
-                ),
-        );
-
-        // Verify payer is not in remaining accounts
-        if ctx
-            .remaining_accounts
-            .iter()
-            .any(|acc| acc.key().eq(&ctx.accounts.payer.key()))
-        {
-            return Err(ProgramError::InvalidAccountData.into());
+        // Build metas (IDENTITY FIRST), followed by the recorded metas, in the recorded order
+        //    Identity must be a signer of the inner ix.
+        let mut metas: Vec<AccountMeta> = Vec::with_capacity(1 + interaction.callback_account_metas.len());
+        metas.push(AccountMeta {
+            pubkey: ctx.accounts.identity.key(),
+            is_signer: true,
+            is_writable: false,
+        });
+        // Ensure none of the recorded metas claim `is_signer = true` (we can’t sign for them)
+        for m in &interaction.callback_account_metas {
+            require!(!m.is_signer, CustomError::IllegalSignerMeta);
+            metas.push(AccountMeta {
+                pubkey: m.pubkey,
+                is_signer: false,
+                is_writable: m.is_writable,
+            });
         }
 
+        // 7) Verify the provided remaining accounts cover those metas (by pubkey) and assemble
+        //    AccountInfos in the SAME ORDER: identity, then each meta, then the program account.
+        let mut infos: Vec<AccountInfo<'info>> = Vec::with_capacity(1 + ctx.remaining_accounts.len() + 1);
+        infos.push(ctx.accounts.identity.to_account_info());
 
-        // CPI to the callback program
+        for m in &interaction.callback_account_metas {
+            // find corresponding AccountInfo in remaining_accounts
+            let ai = ctx
+                .remaining_accounts
+                .iter()
+                .find(|ai| ai.key() == m.pubkey)
+                .ok_or(CustomError::MissingRemainingAccount)?
+                .to_account_info();
+            // assert writability matches.
+            if m.is_writable {
+                require!(ai.is_writable, CustomError::WritabilityMismatch);
+            }
+            infos.push(ai);
+        }
+
+        require!(
+            !ctx.remaining_accounts.iter().any(|acc| acc.key() == ctx.accounts.oracle_signer.key()),
+            CustomError::OracleMustNotAppearInRemaining
+        );
+
         let instruction = Instruction {
             program_id: ctx.accounts.program.key(),
-            accounts: accounts_metas,
-            data: response_data.to_vec(),
+            accounts: metas,
+            data,
         };
-        let mut remaining_accounts: Vec<AccountInfo<'info>> = ctx.remaining_accounts.to_vec();
-        remaining_accounts.push(ctx.accounts.identity.to_account_info());
-        remaining_accounts.push(ctx.accounts.program.to_account_info());
 
+        // program account must be included in the infos slice
+        infos.push(ctx.accounts.program.to_account_info());
+
+        // 8) Sign as the identity PDA
         let identity_bump = ctx.bumps.identity;
         invoke_signed(
             &instruction,
-            &remaining_accounts,
+            &infos,
             &[&[b"identity", &[identity_bump]]],
         )?;
-        Ok(())
+
+        Ok(()) 
     }
 
     pub fn callback_from_oracle(ctx: Context<CallbackFromOracle>, response: String, is_processed: bool) -> Result<()> {
-        if !ctx.accounts.identity.to_account_info().is_signer {
-            return Err(ProgramError::InvalidAccountData.into());
-        }
-        msg!("Callback response: {:?}", response);
+        // Identity must appear as a signer on the INNER instruction (enforced by our invoke_signed)
+        require!(ctx.accounts.identity.to_account_info().is_signer, CustomError::IdentityNotSigner);
+        msg!("Callback response: {}", response);
+        msg!("Processed? {}", is_processed);
         Ok(())
     }
 
@@ -202,23 +270,23 @@ pub mod loyal_oracle {
             ],
             DelegateConfig {
                 commit_frequency_ms: 0,
-                validator: Some(pubkey!("mAGicPQYBMvcYveUZA5F5UNNwyHvfYh5xkLS2Fr1mev")),
+                validator: Some(pubkey!("MUS3hc9TCw4cGC12vHNoYcCGzJG1txjgQLZWVoeNHNd")),
             },
         )?;
         Ok(())
     }
 
-    pub fn delegate_interaction(ctx: Context<DelegateInteraction>) -> Result<()> {
+    pub fn delegate_interaction(ctx: Context<DelegateInteraction>, interaction_id: u64) -> Result<()> {
         ctx.accounts.delegate_interaction(
             &ctx.accounts.payer,
             &[
-                Interaction::seed(),
-                &ctx.accounts.payer.key().to_bytes(),
-                &ctx.accounts.context_account.key().to_bytes(),
+                INTERACTION_SEED,
+                ctx.accounts.context_account.key().as_ref(),
+                &interaction_id.to_le_bytes(),
             ],
             DelegateConfig {
                 commit_frequency_ms: 0,
-                validator: Some(pubkey!("mAGicPQYBMvcYveUZA5F5UNNwyHvfYh5xkLS2Fr1mev")),
+                validator: Some(pubkey!("MUS3hc9TCw4cGC12vHNoYcCGzJG1txjgQLZWVoeNHNd")),
             },
         )?;
         Ok(())
@@ -251,7 +319,6 @@ pub struct Initialize<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(text: String)]
 pub struct CreateContext<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
@@ -260,7 +327,7 @@ pub struct CreateContext<'info> {
         init_if_needed,
         payer = payer,
         // 8 discr + 32 owner + (fields)
-        space = 8 + 32 + 8 + 4 + text.as_bytes().len(),
+        space = 8 + 32 + 8 + 4,
         seeds = [ContextAccount::seed(), payer.key().as_ref()],
         bump
     )]
@@ -284,11 +351,7 @@ pub struct DelegateContext<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(
-    text: String, 
-    callback_program_id: Pubkey, 
-    callback_discriminator: [u8; 8], 
-    account_metas: Option<Vec<AccountMeta>>)]
+#[instruction(interaction_id: u64)]
 pub struct InteractWithLlm<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
@@ -300,52 +363,71 @@ pub struct InteractWithLlm<'info> {
     )]
     pub context_account: Account<'info, ContextAccount>,
 
-    /// CHECK: fresh PDA per (context, next_interaction)
+    /// CHECK: fresh PDA per (context, interaction_id)
     #[account(
-        mut,
+        init_if_needed,
+        payer = payer,
+        space = 8 + Interaction::INIT_SPACE,
         seeds = [
-            Interaction::seed(),
+            INTERACTION_SEED,
             context_account.key().as_ref(),
-            &context_account.next_interaction.to_le_bytes()
+            &interaction_id.to_le_bytes(),
         ],
         bump
     )]
-    pub interaction: AccountInfo<'info>,
+    pub interaction: Account<'info, Interaction>,
 
     pub system_program: Program<'info, System>,
 }
 
+#[derive(AnchorSerialize, AnchorDeserialize)]
+struct CallbackArgs {
+    response: String,
+    is_processed: bool,
+}
+
 #[derive(Accounts)]
 pub struct CallbackFromLlm<'info> {
-    #[account(mut, address = ORACLE_IDENTITY)]
-    pub payer: Signer<'info>,
+    /// The oracle's off-chain signer
+    #[account(mut)]
+    pub oracle_signer: Signer<'info>,
+
+    /// Identity PDA of THIS program: signs the inner CPI
     #[account(seeds = [b"identity"], bump)]
     pub identity: Account<'info, Identity>,
-    /// CHECK: we accept any context
+
+    /// must be owned by this program
     #[account(mut)]
     pub interaction: Account<'info, Interaction>,
-    /// CHECK: the callback program
+
+    /// The target program to receive the callback CPI.
+    /// CHECK:
     pub program: AccountInfo<'info>,
 }
 
 #[derive(Accounts)]
 pub struct CallbackFromOracle<'info> {
+    /// Identity PDA must be the signer of the inner call
     #[account(seeds = [b"identity"], bump)]
     pub identity: Account<'info, Identity>,
 }
 
 #[delegate]
 #[derive(Accounts)]
+#[instruction(interaction_id: u64)]
 pub struct DelegateInteraction<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
+
     /// CHECK: the correct interaction account
     #[account(
         mut, del,
-        seeds = [Interaction::seed(), payer.key().as_ref(), context_account.key().as_ref()],
+        seeds = [INTERACTION_SEED, context_account.key().as_ref(), &interaction_id.to_le_bytes()],
         bump
     )]
+    /// CHECK: we only use seeds + delegation, no need to deserialize here
     pub interaction: AccountInfo<'info>,
+
     /// CHECK: we accept any context
     pub context_account: AccountInfo<'info>,
 }
@@ -356,13 +438,12 @@ pub struct DelegateInteraction<'info> {
 pub struct ContextAccount {
     pub owner: Pubkey,
     pub next_interaction: u64,
-    pub text: String,
 }
 
 impl ContextAccount { pub fn seed() -> &'static [u8] { b"context" } }
 
 #[account]
-#[derive(Default, Debug)]
+#[derive(InitSpace)]
 pub struct Interaction {
     /// ---- fixed-size header (stable offsets) ----
     pub context: Pubkey,
@@ -374,33 +455,23 @@ pub struct Interaction {
     pub callback_discriminator: [u8; 8],
 
     /// ---- dynamic fields (variable offsets) ----
+    #[max_len(MAX_TEXT_LEN)]
     pub text: String,
+    #[max_len(MAX_RESPONSE_LEN)]
     pub response: String,
-    pub callback_account_metas: Vec<AccountMeta>,
+    #[max_len(MAX_CALLBACK_METAS)]
+    pub callback_account_metas: Vec<StoredAccountMeta>,
 
-}
-
-impl Interaction {
-    pub fn seed() -> &'static [u8] { b"interaction" }
-
-    pub fn space(text: &str, metas_len: usize) -> usize {
-        // 8 discr
-        // 32 context + 32 user + 8 id + 8 created_at + 1 status
-        // 32 callback_program_id + 8 callback_discriminator
-        // 4 text len + 4 vec len + (4 + MAX_RESPONSE_LEN) for String
-        const BASE: usize = 8 + 32 + 32 + 8 + 8 + 1 + 32 + 8 + 4 + 4 + (4 + MAX_RESPONSE_LEN);
-        BASE + text.len() + metas_len * AccountMeta::SIZE
-    }
 }
 
 #[derive(InitSpace, AnchorSerialize, AnchorDeserialize, Clone, Debug)]
-pub struct AccountMeta {
+pub struct StoredAccountMeta {
     pub pubkey: Pubkey,
     pub is_signer: bool,
     pub is_writable: bool,
 }
 
-impl AccountMeta {
+impl StoredAccountMeta {
     pub const SIZE: usize = 32 + 1 + 1;
 }
 
