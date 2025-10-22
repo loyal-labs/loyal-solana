@@ -11,8 +11,8 @@ describe.only("loyal-oracle", () => {
   const chatId = new BN(0);
   const STATUS_PENDING = 1;
   const STATUS_DONE = 2;
-
   const oracleKeypair: web3.Keypair = (baseProvider.wallet as any).payer;
+
   const testKeypair = web3.Keypair.generate();
   const testWallet = new anchor.Wallet(testKeypair);
 
@@ -116,7 +116,6 @@ describe.only("loyal-oracle", () => {
 
   it("Create Chat!", async () => {
     const chatId = new BN(0);
-    // create random 32 byte key
 
     const tx = await program.methods
       .createChat(chatId, cmk, txId)
@@ -131,7 +130,7 @@ describe.only("loyal-oracle", () => {
     console.log("chat", chat);
   });
 
-  it("Get Dek!", async () => {
+  it("Get DEK for user!", async () => {
     const eventP = new Promise<{
       name: string;
       data: { chat: anchor.web3.PublicKey; chatId: anchor.BN; dek: Buffer[] };
@@ -147,7 +146,7 @@ describe.only("loyal-oracle", () => {
       );
     });
 
-    const tx = await program.methods
+    await program.methods
       .getDek()
       .accounts({
         caller: provider.wallet.publicKey,
@@ -156,8 +155,39 @@ describe.only("loyal-oracle", () => {
       .rpc();
 
     const evt = await eventP;
+    const userDek = evt.data.dek;
+    console.log("userDek", userDek);
+    await new Promise((resolve) => setTimeout(resolve, 500));
 
-    console.log("evt", evt);
+    const eventPO = new Promise<{
+      name: string;
+      data: { chat: anchor.web3.PublicKey; chatId: anchor.BN; dek: Buffer[] };
+      slot: number;
+      signature?: string;
+    }>(async (resolve) => {
+      const listener = await program.addEventListener(
+        "dekResponse",
+        (event, slot, signature) => {
+          program.removeEventListener(listener).catch(() => {});
+          resolve({ name: "dekResponse", data: event as any, slot, signature });
+        }
+      );
+    });
+
+    await program.methods
+      .getDek()
+      .accounts({
+        caller: oracleKeypair.publicKey,
+        chat: chatAddress,
+      })
+      .signers([oracleKeypair])
+      .rpc();
+
+    console.log("awaiting oracle dek");
+
+    const evtO = await eventPO;
+    const oracleDek = evtO.data.dek;
+    console.log("oracleDek", oracleDek);
   });
 
   it("Update Status From Oracle!", async () => {
