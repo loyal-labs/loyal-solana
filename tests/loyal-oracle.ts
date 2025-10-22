@@ -190,7 +190,7 @@ describe.only("loyal-oracle", () => {
 
   it("Update Status From Oracle!", async () => {
     const tx = await program.methods
-      .updateStatus(STATUS_DONE, null)
+      .updateStatus(STATUS_DONE)
       .accounts({
         caller: provider.wallet.publicKey,
         chat: chatAddress,
@@ -201,7 +201,7 @@ describe.only("loyal-oracle", () => {
     expect(chat.status).to.equal(STATUS_DONE);
 
     const txOracle = await program.methods
-      .updateStatus(STATUS_DONE, null)
+      .updateStatus(STATUS_DONE)
       .accounts({
         caller: oracleKeypair.publicKey,
         chat: chatAddress,
