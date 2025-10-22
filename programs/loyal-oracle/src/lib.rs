@@ -1,7 +1,6 @@
 use anchor_lang::prelude::*;
 use ephemeral_rollups_sdk::anchor::{delegate, ephemeral, commit};
 use ephemeral_rollups_sdk::cpi::DelegateConfig;
-use ephemeral_rollups_sdk::ephem::commit_and_undelegate_accounts;
 use hkdf::Hkdf;
 use sha2::Sha256;
 
@@ -172,7 +171,7 @@ pub mod loyal_oracle {
             ],
             DelegateConfig {
                 commit_frequency_ms: 0,
-                validator: Some(pubkey!("MUS3hc9TCw4cGC12vHNoYcCGzJG1txjgQLZWVoeNHNd")),
+                validator: Some(pubkey!("mAGicPQYBMvcYveUZA5F5UNNwyHvfYh5xkLS2Fr1mev")),
             },
         )?;
         Ok(())

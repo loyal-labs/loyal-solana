@@ -2,8 +2,6 @@ import * as anchor from "@coral-xyz/anchor";
 import { BN, Program, web3 } from "@coral-xyz/anchor";
 import { expect } from "chai";
 import { LoyalOracle } from "../target/types/loyal_oracle";
-import { useSessionWallet } from "@magicblock-labs/gum-react-sdk";
-import { useSessionKeyManager } from "@magicblock-labs/gum-react-sdk";
 
 describe.only("loyal-oracle", () => {
   const baseProvider = anchor.AnchorProvider.env();
@@ -196,17 +194,6 @@ describe.only("loyal-oracle", () => {
         // @ts-ignore
         chat: chatAddress,
         contextAccount: contextAccount,
-      })
-      .rpc({ skipPreflight: true });
-    console.log("Your transaction signature", tx);
-  });
-
-  it("Get Dek Ephemeral Rollup!", async () => {
-    const tx = await ephemeralProgram.methods
-      .getDek()
-      .accounts({
-        caller: provider.wallet.publicKey,
-        chat: chatAddress,
       })
       .rpc({ skipPreflight: true });
     console.log("Your transaction signature", tx);
