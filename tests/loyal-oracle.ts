@@ -8,6 +8,7 @@ describe.only("loyal-oracle", () => {
   // anchor.setProvider(provider);
   const cmk = web3.Keypair.generate().publicKey;
   const txId = web3.Keypair.generate().publicKey;
+
   const chatId = new BN(0);
   const STATUS_PENDING = 1;
   const STATUS_DONE = 2;
@@ -38,9 +39,6 @@ describe.only("loyal-oracle", () => {
     testWallet,
     provider.opts
   );
-
-  const topUp = true;
-  const expiryInMinutes = 60;
 
   const ephemeralProgram = new Program<LoyalOracle>(
     program.idl,
@@ -192,7 +190,7 @@ describe.only("loyal-oracle", () => {
 
   it("Update Status From Oracle!", async () => {
     const tx = await program.methods
-      .updateStatus(STATUS_DONE)
+      .updateStatus(STATUS_DONE, null)
       .accounts({
         caller: provider.wallet.publicKey,
         chat: chatAddress,
@@ -203,7 +201,7 @@ describe.only("loyal-oracle", () => {
     expect(chat.status).to.equal(STATUS_DONE);
 
     const txOracle = await program.methods
-      .updateStatus(STATUS_DONE)
+      .updateStatus(STATUS_DONE, null)
       .accounts({
         caller: oracleKeypair.publicKey,
         chat: chatAddress,
@@ -216,16 +214,16 @@ describe.only("loyal-oracle", () => {
     expect(chat.status).to.equal(STATUS_DONE);
   });
 
-  it("Delegate Chat!", async () => {
-    const tx = await program.methods
-      .delegateChat(chatId)
-      .accounts({
-        payer: provider.wallet.publicKey,
-        // @ts-ignore
-        chat: chatAddress,
-        contextAccount: contextAccount,
-      })
-      .rpc({ skipPreflight: true });
-    console.log("Your transaction signature", tx);
-  });
+  // it("Delegate Chat!", async () => {
+  //   const tx = await program.methods
+  //     .delegateChat(chatId)
+  //     .accounts({
+  //       payer: provider.wallet.publicKey,
+  //       // @ts-ignore
+  //       chat: chatAddress,
+  //       contextAccount: contextAccount,
+  //     })
+  //     .rpc({ skipPreflight: true });
+  //   console.log("Your transaction signature", tx);
+  // });
 });

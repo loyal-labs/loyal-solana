@@ -32,7 +32,9 @@ pub enum CustomError {
     #[msg("Context does not match the PDA being updated.")]
     ContextMismatch,
     #[msg("Arithmetic overflow.")]
-    MathOverflow
+    MathOverflow,
+    #[msg("Oracle tx id mismatch.")]
+    OracleTxIdMismatch,
 }
 
 #[event]
@@ -91,7 +93,8 @@ pub mod loyal_oracle {
     
             // encryption fields
             c.cmk = cmk;
-            c.tx_id = tx_id;
+            c.user_tx_id = tx_id;
+            c.oracle_tx_id = Pubkey::default();
     
             // advance counter once per new PDA
             ctx.accounts.context_account.next_chat_id =
@@ -122,7 +125,7 @@ pub mod loyal_oracle {
         let cmk_bytes = c.cmk.to_bytes();    // IKM
         let mut info: [u8; 37] = [0u8; 37];  // "file:" (5) + 32-byte tx_id
         info[..5].copy_from_slice(b"file:");
-        info[5..].copy_from_slice(&c.tx_id.to_bytes());
+        info[5..].copy_from_slice(&c.user_tx_id.to_bytes());
     
         let kdf = Hkdf::<Sha256>::new(None, &cmk_bytes);
         let mut dek = [0u8; 32];
@@ -140,13 +143,21 @@ pub mod loyal_oracle {
     pub fn update_status(
         ctx: Context<UpdateChatStatus>,
         new_status: u8,                   // e.g. STATUS_DONE or STATUS_ERROR
+        oracle_tx_id: Option<Pubkey>,
     ) -> Result<()> {
         let caller_key = ctx.accounts.caller.key();
         let c = &mut ctx.accounts.chat;
         let is_user = caller_key == c.user;
         let is_oracle = caller_key == ORACLE_IDENTITY;
         require!(is_user || is_oracle, CustomError::Unauthorized);
-     
+
+        if is_oracle {
+            // if oracle_tx_id is provided, update the oracle_tx_id
+            if let Some(oracle_tx_id) = oracle_tx_id {
+                c.oracle_tx_id = oracle_tx_id;
+            }
+        }
+
         require!(
             new_status == STATUS_DONE || new_status == STATUS_ERROR || new_status == STATUS_PENDING,
             CustomError::Unauthorized
@@ -294,7 +305,9 @@ pub struct UndelegateChat<'info> {
     pub context_account: AccountInfo<'info>,
 }
 
+/// --------------------------------------------------
 /// Accounts
+/// --------------------------------------------------
 
 #[account]
 pub struct ContextAccount {
@@ -314,7 +327,8 @@ pub struct Chat {
     pub created_at: i64, // unix timestamp
     pub status: u8,
     pub cmk: Pubkey,
-    pub tx_id: Pubkey,
+    pub user_tx_id: Pubkey,
+    pub oracle_tx_id: Pubkey,
 }
 
 #[derive(Accounts)]
